@@ -1,0 +1,35 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/lib/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model IgAccount {
+  id       String  @id @default(cuid())
+  username String  @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  outgoing IgEdge[] @relation("OwnerEdges")
+  incoming IgEdge[] @relation("TargetEdges")
+}
+
+enum IgEdgeKind {
+  FOLLOWERS
+  FOLLOWING
+}
+
+model IgEdge {
+  id        String    @id @default(cuid())
+  kind      IgEdgeKind
+  ownerId   String
+  targetId  String
+  createdAt DateTime  @default(now())
+
+  owner  IgAccount @relation("OwnerEdges", fields: [ownerId], references: [id], onDelete: Cascade)
+  target IgAccount @relation("TargetEdges", fields: [targetId], references: [id], onDelete: Cascade)
+
+  @@unique([ownerId, targetId, kind], name: "ownerId_targetId_kind")
+}
