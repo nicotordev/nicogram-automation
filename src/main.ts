@@ -1,7 +1,7 @@
 import { consola } from "consola";
 import * as path from "node:path";
 import { ensureDir, openPersistent, type RunOptions } from "./core/browser.js";
-import { JsonDatabase, type ScanResult } from "./core/db.js";
+import { Database, type ScanResult } from "./core/db.js";
 import { getUserId, scrapeListViaApi } from "./instagram/api.js";
 import { waitForLogin } from "./instagram/auth.js";
 import { clearPopups } from "./instagram/interactions.js";
@@ -11,7 +11,7 @@ import { broadcast, registerAutomationHandler, startServer } from "./server/serv
 async function runAutomation() {
   broadcast("status", { message: "Starting automation..." });
   const root = process.cwd();
-  const db = new JsonDatabase(root);
+  const db = new Database(root);
   ensureDir(path.join(root, "screenshots"));
 
   const winUserAgent =
@@ -53,8 +53,7 @@ async function runAutomation() {
     broadcast("data", { followingCount: following.length });
 
     const result: ScanResult = { timestamp: new Date().toISOString(), followers, following };
-    db.addScan(result);
-    db.upsertProfile(username, { username });
+    await db.addScan(username, result);
 
     broadcast("status", { message: "Done! Saved data." });
 

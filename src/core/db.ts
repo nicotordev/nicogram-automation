@@ -1,5 +1,5 @@
-import * as fs from "node:fs";
-import * as path from "node:path";
+import { prisma } from "../lib/prisma.js";
+import { type Profile } from "../lib/generated/prisma/client.js";
 
 export type InstagramProfile = {
   username: string;
@@ -13,48 +13,60 @@ export type ScanResult = {
   following: string[];
 };
 
-export type DatabaseSchema = {
-  profiles: Record<string, InstagramProfile>;
-  scans: ScanResult[];
-};
-
-export class JsonDatabase {
-  private dbPath: string;
-  private data: DatabaseSchema;
-
-  constructor(storageDir: string, dbName = "database.json") {
-    this.dbPath = path.join(storageDir, dbName);
-    this.data = this.load();
+export class Database {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  constructor(_storageDir?: string) {
+    // storageDir is kept for compatibility with old constructor but unused
   }
 
-  private load(): DatabaseSchema {
-    if (!fs.existsSync(this.dbPath)) {
-      return { profiles: {}, scans: [] };
-    }
-    try {
-      const content = fs.readFileSync(this.dbPath, "utf-8");
-      return JSON.parse(content);
-    } catch (e) {
-      console.error("Failed to load DB, starting fresh", e);
-      return { profiles: {}, scans: [] };
-    }
+  public async upsertProfile(username: string, profileData: Partial<InstagramProfile>): Promise<Profile> {
+    return prisma.profile.upsert({
+      where: { username },
+      update: {
+        fullName: profileData.fullName,
+        profilePicUrl: profileData.profilePicUrl,
+      },
+      create: {
+        username,
+        fullName: profileData.fullName,
+        profilePicUrl: profileData.profilePicUrl,
+      },
+    });
   }
 
-  public save(): void {
-    fs.writeFileSync(this.dbPath, JSON.stringify(this.data, null, 2));
+  public async addScan(username: string, scan: ScanResult): Promise<void> {
+    // Ensure profile exists first
+    const profile = await this.upsertProfile(username, { username });
+
+    await prisma.scan.create({
+      data: {
+        timestamp: new Date(scan.timestamp),
+        profileId: profile.id,
+        followers: {
+          create: scan.followers.map((f) => ({ username: f })),
+        },
+        following: {
+          create: scan.following.map((f) => ({ username: f })),
+        },
+      },
+    });
   }
 
-  public addScan(scan: ScanResult) {
-    this.data.scans.push(scan);
-    this.save();
-  }
+  public async getScans(): Promise<ScanResult[]> {
+    const scans = await prisma.scan.findMany({
+      include: {
+        followers: true,
+        following: true,
+      },
+      orderBy: {
+        timestamp: "desc",
+      },
+    });
 
-  public upsertProfile(username: string, profile: Partial<InstagramProfile>) {
-    const existing = this.data.profiles[username] || { username };
-    this.data.profiles[username] = { ...existing, ...profile };
-  }
-
-  public getScans(): ScanResult[] {
-    return this.data.scans;
+    return scans.map((s) => ({
+      timestamp: s.timestamp.toISOString(),
+      followers: s.followers.map((f) => f.username),
+      following: s.following.map((f) => f.username),
+    }));
   }
 }

@@ -1,0 +1,46 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/lib/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+model Profile {
+  id            String   @id @default(uuid())
+  username      String   @unique
+  fullName      String?
+  profilePicUrl String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  scans         Scan[]
+}
+
+model Scan {
+  id        String   @id @default(uuid())
+  timestamp DateTime @default(now())
+
+  profile   Profile  @relation(fields: [profileId], references: [id])
+  profileId String
+
+  followers Follower[]
+  following Following[]
+}
+
+model Follower {
+  id        String @id @default(uuid())
+  username  String
+
+  scan      Scan   @relation(fields: [scanId], references: [id], onDelete: Cascade)
+  scanId    String
+}
+
+model Following {
+  id        String @id @default(uuid())
+  username  String
+
+  scan      Scan   @relation(fields: [scanId], references: [id], onDelete: Cascade)
+  scanId    String
+}

@@ -4,15 +4,15 @@ import { Server } from "socket.io";
 import cors from "cors";
 import path from "path";
 import * as fs from "fs";
-import { JsonDatabase } from "../core/db.js";
+import { Database } from "../core/db.js";
 
 const app = express();
 app.use(cors());
 
 // Serve static files from the React app
 const clientBuildPath = path.join(process.cwd(), "client/dist");
-// Ensure dist exists or serve a placeholder? 
-// If dev, we might not have dist yet. 
+// Ensure dist exists or serve a placeholder?
+// If dev, we might not have dist yet.
 if (fs.existsSync(clientBuildPath)) {
     app.use(express.static(clientBuildPath));
 }
@@ -37,10 +37,10 @@ export function registerAutomationHandler(handler: AutomationCallback) {
 
 io.on("connection", (socket) => {
   console.log("UI connected");
-  
+
   // Send history to the new client
   socket.emit("history", eventHistory);
-  
+
   socket.emit("status", { message: "Connected. Ready to start." });
 
   socket.on("start-automation", async () => {
@@ -67,7 +67,7 @@ export function broadcast(event: string, data: any) {
   if (eventHistory.length > MAX_HISTORY) {
     eventHistory.shift();
   }
-  
+
   io.emit(event, data);
 }
 
@@ -78,17 +78,18 @@ export function startServer(port = 3000) {
 }
 
 // API Routes
-app.get("/api/scans", (req, res) => {
+app.get("/api/scans", async (_req, res) => {
   try {
-    const db = new JsonDatabase(process.cwd());
-    res.json(db.getScans());
+    const db = new Database(process.cwd());
+    const scans = await db.getScans();
+    res.json(scans);
   } catch (error) {
     res.status(500).json({ error: "Failed to fetch scans" });
   }
 });
 
 // Handle all other requests by returning the React app
-app.get(/.*/, (req, res) => {
+app.get(/.*/, (_req, res) => {
    if (fs.existsSync(path.join(clientBuildPath, "index.html"))) {
       res.sendFile(path.join(clientBuildPath, "index.html"));
    } else {

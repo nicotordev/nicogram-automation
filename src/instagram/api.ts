@@ -2,6 +2,10 @@ import { consola } from "consola";
 import { type Page } from "playwright";
 import { broadcast } from "../server/server.js";
 
+// Helper para esperar tiempos aleatorios
+const wait = (min: number, max: number) =>
+  new Promise(resolve => setTimeout(resolve, Math.floor(Math.random() * (max - min + 1) + min)));
+
 export async function getUserId(page: Page): Promise<string> {
   const context = page.context();
   const cookies = await context.cookies();
@@ -14,12 +18,21 @@ export async function getUserId(page: Page): Promise<string> {
   }
 
   consola.warn("Cookie not found, trying HTML scraping...");
+
+  // Intenta extraer de window._sharedData o scripts modernos de IG
   const userIdFromPage = await page.evaluate(() => {
     try {
+      // Método moderno: buscar en variables globales comunes de IG
+      // @ts-ignore
+      if (window.__additionalData && window.__additionalData[location.pathname]) {
+        // @ts-ignore
+        return window.__additionalData[location.pathname].data?.user?.id;
+      }
+
       const scripts = document.querySelectorAll('script[type="application/json"]');
       for (const script of scripts) {
-        if (script.textContent?.includes('"appScopedIdentity"')) {
-          const match = script.textContent.match(/"appScopedIdentity"\s*:\s*"(\d+)"/);
+        if (script.textContent?.includes('"user_id"')) {
+          const match = script.textContent.match(/"user_id"\s*:\s*"(\d+)"/);
           if (match) return match[1];
         }
       }
@@ -45,7 +58,13 @@ export async function scrapeListViaApi(page: Page, mode: 'followers' | 'followin
   let maxId = "";
   let hasMore = true;
   const MAX_COUNT = 5000;
-  const batchSize = 50;
+  const batchSize = 12; // Bajamos el batch size para ser menos agresivos
+
+  // Asegurar que estamos en el contexto correcto para el Referer
+  if (!page.url().includes('instagram.com')) {
+    await page.goto(`https://www.instagram.com/${mode === 'followers' ? 'followers' : 'following'}`);
+    await wait(2000, 4000);
+  }
 
   while (hasMore && collected.length < MAX_COUNT) {
     let url = `https://www.instagram.com/api/v1/friendships/${userId}/${mode}/?count=${batchSize}&search_surface=follow_list_page`;
@@ -54,14 +73,34 @@ export async function scrapeListViaApi(page: Page, mode: 'followers' | 'followin
     }
 
     try {
-      // Execute fetch in the browser context to use cookies/session
+      // 1. Simular comportamiento humano antes de la petición
+      // Mueve el mouse un poco aleatoriamente para disparar eventos de tracking internos de IG
+      await page.mouse.move(Math.random() * 500, Math.random() * 500);
+      await wait(500, 1500);
+
+      // 2. Ejecutar fetch dentro del contexto con Headers Full
       const result = await page.evaluate(async (targetUrl) => {
         try {
+          // Extraer CSRF Token dinámicamente de las cookies del documento actual
+          const getCookie = (name: string) => {
+            const value = `; ${document.cookie}`;
+            const parts = value.split(`; ${name}=`);
+            if (parts.length === 2) return parts.pop()?.split(';').shift();
+            return null;
+          };
+
+          const csrftoken = getCookie('csrftoken');
+
+          if (!csrftoken) return { ok: false, error: 'No CSRF Token found' };
+
           const res = await fetch(targetUrl, {
+            method: 'GET',
             headers: {
               'x-ig-app-id': '936619743392459',
               'x-asbd-id': '129477',
+              'x-csrftoken': csrftoken, // CRUCIAL
               'x-requested-with': 'XMLHttpRequest',
+              'Referer': window.location.href, // CRUCIAL: Debe coincidir con el origen
             }
           });
 
@@ -72,19 +111,24 @@ export async function scrapeListViaApi(page: Page, mode: 'followers' | 'followin
           const data = await res.json();
           return { ok: true, data };
         } catch (e) {
-          return { ok: false, error: 'Fetch failed' };
+          return { ok: false, error: 'Fetch failed inside page' };
         }
       }, url);
 
+      // Manejo de errores
       if (!result.ok) {
         if (result.status === 429) {
-          consola.warn("Rate limited (429). Waiting 60s...");
-          broadcast("info", { message: "Rate limited. Pausing for 60s..." });
-          await new Promise(r => setTimeout(r, 60000));
+          consola.warn("Rate limited (429). Waiting 2-3 minutes...");
+          broadcast("info", { message: "Rate limited. Pausing for 150s..." });
+          await wait(150000, 180000); // 429 requiere pausas largas reales
           continue;
         }
+        if (result.status === 401 || result.status === 403) {
+          consola.error("Soft Ban or Auth Error (401/403). Stopping.");
+          break;
+        }
         consola.error("API response not OK", result);
-        break;
+        break; // Romper en otros errores para no quemar la cuenta
       }
 
       const data = result.data;
@@ -99,7 +143,6 @@ export async function scrapeListViaApi(page: Page, mode: 'followers' | 'followin
         });
       }
 
-      // Update progress
       consola.info(`Fetched ${batchCount} items. Total: ${collected.length}`);
       broadcast("data", {
         message: `Scraping ${mode}: ${collected.length} collected`,
@@ -115,9 +158,9 @@ export async function scrapeListViaApi(page: Page, mode: 'followers' | 'followin
         consola.info("No more pages (next_max_id missing).");
       }
 
-      // Random delay to be safe
-      const delay = Math.random() * 2000 + 1000;
-      await new Promise(r => setTimeout(r, delay));
+      // Delay aleatorio más largo entre peticiones (3s a 6s)
+      // Instagram banea si haces requests rítmicos perfectos
+      await wait(3000, 6000);
 
     } catch (e) {
       consola.error("Error during loop", e);
