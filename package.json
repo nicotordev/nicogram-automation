@@ -1,0 +1,12 @@
+{
+  "name": "nicogram-automation-root",
+  "private": true,
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev:api": "bun run --filter @apps/api dev",
+    "dev:frontend": "bun run --filter @apps/frontend dev",
+    "install:all": "bun install"
+  }
+}
