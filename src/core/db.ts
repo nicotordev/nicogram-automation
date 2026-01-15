@@ -1,5 +1,5 @@
-import { prisma } from "../lib/prisma.js";
 import { type Profile } from "../lib/generated/prisma/client.js";
+import { prisma } from "../lib/prisma.js";
 
 export type InstagramProfile = {
   username: string;
@@ -68,5 +68,31 @@ export class Database {
       followers: s.followers.map((f) => f.username),
       following: s.following.map((f) => f.username),
     }));
+  }
+
+  public async getFavorites(): Promise<string[]> {
+    const favorites = await prisma.favorite.findMany();
+    return favorites.map((f) => f.username);
+  }
+
+  public async addFavorite(username: string): Promise<void> {
+    await prisma.favorite.upsert({
+      where: { username },
+      update: {},
+      create: { username },
+    });
+  }
+
+  public async removeFavorite(username: string): Promise<void> {
+    await prisma.favorite.deleteMany({
+      where: { username },
+    });
+  }
+
+  public async isFavorite(username: string): Promise<boolean> {
+    const count = await prisma.favorite.count({
+      where: { username },
+    });
+    return count > 0;
   }
 }

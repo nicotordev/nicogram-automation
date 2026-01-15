@@ -41,12 +41,32 @@ function App() {
   });
   const [isConnected, setIsConnected] = useState(false);
 
+  const [favorites, setFavorites] = useState<string[]>([]);
+  const [autoUnfollow, setAutoUnfollow] = useState(false);
+  const [followingList, setFollowingList] = useState<string[]>([]);
+  const [searchTerm, setSearchTerm] = useState("");
+
   const logsEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    // Fetch initial favorites
+    socket.emit("get-favorites");
+
+    // Fetch latest scan data to get following list
+    fetch("/api/scans")
+      .then((res) => res.json())
+      .then((data) => {
+        if (data && data.length > 0) {
+          // Get unique following from latest scan
+          setFollowingList(data[0].following || []);
+        }
+      })
+      .catch((e) => console.error(e));
+
     function onConnect() {
       setIsConnected(true);
       setStatus("Connected to server");
+      socket.emit("get-favorites");
     }
 
     function onDisconnect() {
@@ -67,6 +87,7 @@ function App() {
     function onData(data: any) {
       addLog("data", data);
       setStats((prev) => ({ ...prev, ...data }));
+      // If we get new following count/data, we might want to refresh the list via API if it was saved?
     }
 
     function onError(data: any) {
@@ -91,6 +112,10 @@ function App() {
       setStats((prev) => ({ ...prev, ...newStats }));
     }
 
+    function onFavorites(favs: string[]) {
+      setFavorites(favs);
+    }
+
     socket.on("connect", onConnect);
     socket.on("disconnect", onDisconnect);
     socket.on("status", onStatus);
@@ -98,6 +123,7 @@ function App() {
     socket.on("data", onData);
     socket.on("error", onError);
     socket.on("history", onHistory);
+    socket.on("favorites", onFavorites);
 
     return () => {
       socket.off("connect", onConnect);
@@ -107,6 +133,7 @@ function App() {
       socket.off("data", onData);
       socket.off("error", onError);
       socket.off("history", onHistory);
+      socket.off("favorites", onFavorites);
     };
   }, []);
 
@@ -122,8 +149,16 @@ function App() {
   };
 
   const startAutomation = () => {
-    socket.emit("start-automation");
+    socket.emit("start-automation", { autoUnfollow });
   };
+
+  const toggleFavorite = (username: string) => {
+    socket.emit("toggle-favorite", username);
+  };
+
+  const filteredFollowing = followingList.filter((u) =>
+    u.toLowerCase().includes(searchTerm.toLowerCase())
+  );
 
   return (
     <div className="min-h-screen text-gray-100 font-sans selection:bg-indigo-500/30">
@@ -155,22 +190,40 @@ function App() {
             </p>
           </div>
 
-          <motion.button
-            whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
-            onClick={startAutomation}
-            className="group relative px-8 py-3 bg-indigo-600 rounded-xl overflow-hidden shadow-2xl shadow-indigo-500/30 transition-all hover:bg-indigo-500 hover:shadow-indigo-500/50"
-          >
-            <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent translate-x-[-100%] group-hover:animate-[shimmer_1.5s_infinite]" />
-            <span className="relative flex items-center gap-2 font-semibold text-lg">
-              <Play size={20} className="fill-current" />
-              Start Automation
-            </span>
-          </motion.button>
+          <div className="flex gap-4 items-center">
+            <div className="flex items-center gap-2 bg-white/5 px-4 py-2 rounded-lg border border-white/10">
+              <span className="text-sm font-medium">Auto Unfollow</span>
+              <button
+                onClick={() => setAutoUnfollow(!autoUnfollow)}
+                className={`w-12 h-6 rounded-full p-1 transition-colors ${
+                  autoUnfollow ? "bg-indigo-500" : "bg-gray-700"
+                }`}
+              >
+                <div
+                  className={`w-4 h-4 rounded-full bg-white transition-transform ${
+                    autoUnfollow ? "translate-x-6" : "translate-x-0"
+                  }`}
+                />
+              </button>
+            </div>
+
+            <motion.button
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
+              onClick={startAutomation}
+              className="group relative px-8 py-3 bg-indigo-600 rounded-xl overflow-hidden shadow-2xl shadow-indigo-500/30 transition-all hover:bg-indigo-500 hover:shadow-indigo-500/50"
+            >
+              <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent translate-x-[-100%] group-hover:animate-[shimmer_1.5s_infinite]" />
+              <span className="relative flex items-center gap-2 font-semibold text-lg">
+                <Play size={20} className="fill-current" />
+                Start Automation
+              </span>
+            </motion.button>
+          </div>
         </motion.header>
 
         <main className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-          {/* Left Column: Stats Cards */}
+          {/* Left Column: Stats & Favorites */}
           <div className="lg:col-span-4 space-y-6">
             {/* Profile Card */}
             <motion.div
@@ -229,6 +282,75 @@ function App() {
                     {stats.userId || "---"}
                   </p>
                 </div>
+              </div>
+            </motion.div>
+
+            {/* Favorites Manager */}
+            <motion.div
+              initial={{ opacity: 0, x: -20 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ delay: 0.15 }}
+              className="glass-panel rounded-2xl p-6 shadow-xl max-h-[500px] flex flex-col"
+            >
+              <div className="flex justify-between items-center mb-4">
+                <h2 className="text-xl font-semibold flex items-center gap-2 text-pink-300">
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="22"
+                    height="22"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z" />
+                  </svg>
+                  <span>Favorites</span>
+                </h2>
+                <span className="text-xs bg-pink-500/20 text-pink-300 px-2 py-1 rounded-full">
+                  {favorites.length}
+                </span>
+              </div>
+
+              <input
+                type="text"
+                placeholder="Search recent following..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="w-full bg-black/20 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-indigo-500 mb-4"
+              />
+
+              <div className="flex-1 overflow-y-auto space-y-2 pr-2">
+                {filteredFollowing.length === 0 && (
+                  <div className="text-center text-gray-500 py-4 text-sm">
+                    No following data found. Run automation to fetch.
+                  </div>
+                )}
+                {filteredFollowing.map((u) => (
+                  <div
+                    key={u}
+                    className="flex items-center justify-between bg-white/5 p-2 rounded-lg hover:bg-white/10 transition-colors"
+                  >
+                    <span className="font-mono text-sm text-gray-300 truncate max-w-[150px]">
+                      @{u}
+                    </span>
+                    <button
+                      onClick={() => toggleFavorite(u)}
+                      className={`p-1.5 rounded-full transition-all ${
+                        favorites.includes(u)
+                          ? "bg-pink-500 text-white shadow-lg shadow-pink-500/30"
+                          : "bg-gray-700 text-gray-400 hover:bg-gray-600"
+                      }`}
+                    >
+                      <Heart
+                        size={14}
+                        className={favorites.includes(u) ? "fill-current" : ""}
+                      />
+                    </button>
+                  </div>
+                ))}
               </div>
             </motion.div>
 

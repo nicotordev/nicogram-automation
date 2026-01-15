@@ -1,9 +1,9 @@
-import express from "express";
-import { createServer } from "http";
-import { Server } from "socket.io";
 import cors from "cors";
-import path from "path";
+import express from "express";
 import * as fs from "fs";
+import { createServer } from "http";
+import path from "path";
+import { Server } from "socket.io";
 import { Database } from "../core/db.js";
 
 const app = express();
@@ -14,7 +14,7 @@ const clientBuildPath = path.join(process.cwd(), "client/dist");
 // Ensure dist exists or serve a placeholder?
 // If dev, we might not have dist yet.
 if (fs.existsSync(clientBuildPath)) {
-    app.use(express.static(clientBuildPath));
+  app.use(express.static(clientBuildPath));
 }
 
 const httpServer = createServer(app);
@@ -24,12 +24,12 @@ const io = new Server(httpServer, {
   },
 });
 
-export type AutomationCallback = () => Promise<void>;
+export type AutomationCallback = (options?: { autoUnfollow?: boolean; }) => Promise<void>;
 let automationHandler: AutomationCallback | null = null;
 
 // Store recent events for new clients
 const MAX_HISTORY = 50;
-const eventHistory: Array<{ event: string; data: any; timestamp: string }> = [];
+const eventHistory: Array<{ event: string; data: any; timestamp: string; }> = [];
 
 export function registerAutomationHandler(handler: AutomationCallback) {
   automationHandler = handler;
@@ -43,18 +43,46 @@ io.on("connection", (socket) => {
 
   socket.emit("status", { message: "Connected. Ready to start." });
 
-  socket.on("start-automation", async () => {
+  socket.on("get-favorites", async () => {
+    try {
+      const db = new Database(process.cwd());
+      const favorites = await db.getFavorites();
+      socket.emit("favorites", favorites);
+    } catch (e) {
+      socket.emit("error", { message: "Failed to fetch favorites" });
+    }
+  });
+
+  socket.on("toggle-favorite", async (username: string) => {
+    try {
+      const db = new Database(process.cwd());
+      const isFav = await db.isFavorite(username);
+      if (isFav) {
+        await db.removeFavorite(username);
+      } else {
+        await db.addFavorite(username);
+      }
+      // Emit updated list
+      const favorites = await db.getFavorites();
+      socket.emit("favorites", favorites);
+      // broadcast("info", { message: `${isFav ? "Removed" : "Added"} @${username} to favorites` });
+    } catch (e) {
+      socket.emit("error", { message: "Failed to toggle favorite" });
+    }
+  });
+
+  socket.on("start-automation", async (options: { autoUnfollow?: boolean; } = {}) => {
     if (automationHandler) {
-      console.log("Starting automation via UI request");
+      console.log("Starting automation via UI request", options);
       socket.emit("status", { message: "Automation starting..." });
       try {
-        await automationHandler();
+        await automationHandler(options);
         // socket.emit("status", { message: "Automation finished." }); // Handled in automation
       } catch (e) {
-         // handled elsewhere
+        // handled elsewhere
       }
     } else {
-        socket.emit("error", { message: "No automation handler registered." });
+      socket.emit("error", { message: "No automation handler registered." });
     }
   });
 });
@@ -90,9 +118,9 @@ app.get("/api/scans", async (_req, res) => {
 
 // Handle all other requests by returning the React app
 app.get(/.*/, (_req, res) => {
-   if (fs.existsSync(path.join(clientBuildPath, "index.html"))) {
-      res.sendFile(path.join(clientBuildPath, "index.html"));
-   } else {
-     res.send("UI not built. Please run `cd client && npm run build` or use the dev server.");
-   }
+  if (fs.existsSync(path.join(clientBuildPath, "index.html"))) {
+    res.sendFile(path.join(clientBuildPath, "index.html"));
+  } else {
+    res.send("UI not built. Please run `cd client && npm run build` or use the dev server.");
+  }
 });

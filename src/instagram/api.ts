@@ -17,36 +17,26 @@ export async function getUserId(page: Page): Promise<string> {
     return dsUserIdCookie.value;
   }
 
-  consola.warn("Cookie not found, trying HTML scraping...");
-
-  // Intenta extraer de window._sharedData o scripts modernos de IG
+  // Fallback a HTML scraping optimizado
   const userIdFromPage = await page.evaluate(() => {
     try {
-      // Método moderno: buscar en variables globales comunes de IG
       // @ts-ignore
       if (window.__additionalData && window.__additionalData[location.pathname]) {
         // @ts-ignore
         return window.__additionalData[location.pathname].data?.user?.id;
       }
-
-      const scripts = document.querySelectorAll('script[type="application/json"]');
-      for (const script of scripts) {
-        if (script.textContent?.includes('"user_id"')) {
-          const match = script.textContent.match(/"user_id"\s*:\s*"(\d+)"/);
-          if (match) return match[1];
-        }
-      }
+      // Intento de Regex rápido sobre todo el HTML si falla lo anterior
+      const match = document.body.innerHTML.match(/"user_id"\s*:\s*"(\d+)"/);
+      if (match) return match[1];
     } catch (e) { return null; }
     return null;
   });
 
   if (userIdFromPage) {
-    consola.success(`Found User ID via HTML: ${userIdFromPage}`);
-    broadcast("info", { message: `Found User ID via HTML: ${userIdFromPage}` });
     return userIdFromPage;
   }
 
-  throw new Error("❌ Could not find User ID in cookies or page source.");
+  throw new Error("❌ Could not find User ID. Make sure you are logged in.");
 }
 
 export async function scrapeListViaApi(page: Page, mode: 'followers' | 'following', userId: string): Promise<string[]> {
@@ -58,30 +48,30 @@ export async function scrapeListViaApi(page: Page, mode: 'followers' | 'followin
   let maxId = "";
   let hasMore = true;
   const MAX_COUNT = 5000;
-  const batchSize = 12; // Bajamos el batch size para ser menos agresivos
 
-  // Asegurar que estamos en el contexto correcto para el Referer
+  // AUMENTADO A 50: Esto hace el script 4 veces más rápido sin aumentar el riesgo.
+  const batchSize = 50;
+
+  // Navegar a la página real para establecer headers de contexto (Referer correcto)
   if (!page.url().includes('instagram.com')) {
-    await page.goto(`https://www.instagram.com/${mode === 'followers' ? 'followers' : 'following'}`);
-    await wait(2000, 4000);
+    await page.goto(`https://www.instagram.com/${userId}/`);
+    await wait(2000, 3000);
   }
 
+  let requestCount = 0;
+
   while (hasMore && collected.length < MAX_COUNT) {
+    // URL legítima de la API v1
     let url = `https://www.instagram.com/api/v1/friendships/${userId}/${mode}/?count=${batchSize}&search_surface=follow_list_page`;
     if (maxId) {
       url += `&max_id=${encodeURIComponent(maxId)}`;
     }
 
     try {
-      // 1. Simular comportamiento humano antes de la petición
-      // Mueve el mouse un poco aleatoriamente para disparar eventos de tracking internos de IG
-      await page.mouse.move(Math.random() * 500, Math.random() * 500);
-      await wait(500, 1500);
-
-      // 2. Ejecutar fetch dentro del contexto con Headers Full
+      // Ejecutamos el fetch DENTRO del navegador para heredar cookies y sesión
       const result = await page.evaluate(async (targetUrl) => {
         try {
-          // Extraer CSRF Token dinámicamente de las cookies del documento actual
+          // Utilidad interna para leer cookies
           const getCookie = (name: string) => {
             const value = `; ${document.cookie}`;
             const parts = value.split(`; ${name}=`);
@@ -90,45 +80,49 @@ export async function scrapeListViaApi(page: Page, mode: 'followers' | 'followin
           };
 
           const csrftoken = getCookie('csrftoken');
+          if (!csrftoken) return { ok: false, error: 'No CSRF Token' };
 
-          if (!csrftoken) return { ok: false, error: 'No CSRF Token found' };
+          // Intentar obtener el claim header del localStorage (mejora indetectabilidad)
+          const wwwClaim = window.localStorage.getItem('ig_www_claim') || '0';
 
           const res = await fetch(targetUrl, {
             method: 'GET',
             headers: {
               'x-ig-app-id': '936619743392459',
               'x-asbd-id': '129477',
-              'x-csrftoken': csrftoken, // CRUCIAL
+              'x-csrftoken': csrftoken,
+              'x-ig-www-claim': wwwClaim, // CRÍTICO para parecer navegador real
               'x-requested-with': 'XMLHttpRequest',
-              'Referer': window.location.href, // CRUCIAL: Debe coincidir con el origen
+              'X-Instagram-AJAX': '1',
+              'Referer': window.location.href,
             }
           });
 
-          if (!res.ok) {
-            return { status: res.status, ok: false };
-          }
-
+          if (!res.ok) return { status: res.status, ok: false };
           const data = await res.json();
           return { ok: true, data };
         } catch (e) {
-          return { ok: false, error: 'Fetch failed inside page' };
+          return { ok: false, error: 'Fetch execution failed' };
         }
       }, url);
 
-      // Manejo de errores
+      // --- MANEJO DE RESPUESTAS Y ERRORES ---
+
       if (!result.ok) {
         if (result.status === 429) {
-          consola.warn("Rate limited (429). Waiting 2-3 minutes...");
-          broadcast("info", { message: "Rate limited. Pausing for 150s..." });
-          await wait(150000, 180000); // 429 requiere pausas largas reales
+          consola.warn("Rate limited (429). Pausing significantly...");
+          broadcast("info", { message: "Rate limit hit. Cooling down for 3 min..." });
+          // Si nos limitan, esperamos mucho tiempo real. Es la única forma de salvar la sesión.
+          await wait(180000, 200000);
           continue;
         }
         if (result.status === 401 || result.status === 403) {
-          consola.error("Soft Ban or Auth Error (401/403). Stopping.");
+          consola.error(`Auth Error (${result.status}). Session might be dead.`);
           break;
         }
-        consola.error("API response not OK", result);
-        break; // Romper en otros errores para no quemar la cuenta
+        // Error genérico, esperamos un poco y reintentamos
+        await wait(5000, 10000);
+        continue;
       }
 
       const data = result.data;
@@ -143,6 +137,7 @@ export async function scrapeListViaApi(page: Page, mode: 'followers' | 'followin
         });
       }
 
+      // Feedback visual
       consola.info(`Fetched ${batchCount} items. Total: ${collected.length}`);
       broadcast("data", {
         message: `Scraping ${mode}: ${collected.length} collected`,
@@ -150,25 +145,43 @@ export async function scrapeListViaApi(page: Page, mode: 'followers' | 'followin
         mode
       });
 
+      // Paginación
       if (data.next_max_id) {
         maxId = data.next_max_id;
         hasMore = true;
       } else {
         hasMore = false;
-        consola.info("No more pages (next_max_id missing).");
+        consola.info("End of list reached.");
       }
 
-      // Delay aleatorio más largo entre peticiones (3s a 6s)
-      // Instagram banea si haces requests rítmicos perfectos
-      await wait(3000, 6000);
+      // --- ESTRATEGIA DE TIEMPO "HUMANA" ---
+
+      requestCount++;
+
+      // Delay base rápido (1.5s - 2.5s)
+      let currentDelay = Math.random() * 1000 + 1500;
+
+      // Cada 10 peticiones (500 usuarios), hacemos una pausa "de descanso"
+      // Esto simula que el usuario dejó de hacer scroll un momento
+      if (requestCount % 10 === 0) {
+        consola.log("Micro-pause to simulate human reading...");
+        currentDelay = 5000 + Math.random() * 3000;
+      }
+
+      // Movimiento de mouse mínimo para mantener la sesión "viva"
+      if (requestCount % 3 === 0) {
+        await page.mouse.move(Math.random() * 300, Math.random() * 300);
+      }
+
+      await new Promise(r => setTimeout(r, currentDelay));
 
     } catch (e) {
-      consola.error("Error during loop", e);
+      consola.error("Loop error", e);
       break;
     }
   }
 
-  const doneMsg = `API Scrape complete. Found ${collected.length} ${mode}.`;
+  const doneMsg = `Scrape complete. Found ${collected.length} ${mode}.`;
   consola.success(doneMsg);
   broadcast("status", { message: doneMsg });
 
