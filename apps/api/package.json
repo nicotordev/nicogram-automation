@@ -6,11 +6,12 @@
   "scripts": {
     "build": "npx prisma generate && tsc",
     "start": "node dist/main.js",
-    "dev": "bun run build && bun run start",
+    "dev": "bun run src/main.ts --watch",
     "prisma:generate": "prisma generate"
   },
   "dependencies": {
     "@prisma/adapter-better-sqlite3": "^7.2.0",
+    "@prisma/adapter-libsql": "^7.2.0",
     "@prisma/client": "^7.2.0",
     "@types/better-sqlite3": "^7.6.13",
     "consola": "^3.4.2",

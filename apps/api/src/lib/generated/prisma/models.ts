@@ -8,9 +8,9 @@
  *
  * 🟢 You can import this file directly.
  */
-export type * from './models/Profile'
-export type * from './models/Scan'
-export type * from './models/Follower'
-export type * from './models/Following'
-export type * from './models/Favorite'
-export type * from './commonInputTypes'
+export type * from './models/Profile.js'
+export type * from './models/Scan.js'
+export type * from './models/Follower.js'
+export type * from './models/Following.js'
+export type * from './models/Favorite.js'
+export type * from './commonInputTypes.js'

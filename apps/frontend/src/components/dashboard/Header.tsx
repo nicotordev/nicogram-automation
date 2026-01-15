@@ -1,24 +1,39 @@
 import { motion } from "framer-motion";
-import { Play, ShieldCheck, Wifi, WifiOff } from "lucide-react";
+import { Pause, Play, Wifi, WifiOff, PlaySquare, Square, ChevronDown } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Switch } from "@/components/ui/switch";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
-interface HeaderProps {
+interface HeaderSyncProps {
+  toggleSync: () => void;
+  isSyncing: boolean;
+}
+
+interface HeaderAutoUnfollowProps {
+  isAutoUnfollowing: boolean;
+  toggleAutoUnfollow: () => void;
+}
+
+interface HeaderProps extends HeaderSyncProps, HeaderAutoUnfollowProps {
   isConnected: boolean;
   status: string;
-  autoUnfollow: boolean;
-  setAutoUnfollow: (v: boolean) => void;
-  startAutomation: () => void;
+  isProfileMissing?: boolean;
 }
 
 export function Header({
   isConnected,
   status,
-  autoUnfollow,
-  setAutoUnfollow,
-  startAutomation,
+  toggleSync,
+  isSyncing,
+  toggleAutoUnfollow,
+  isAutoUnfollowing,
+  isProfileMissing,
 }: HeaderProps) {
   return (
     <motion.div
@@ -47,28 +62,49 @@ export function Header({
         <p className="text-sm text-muted-foreground">{status}</p>
       </div>
 
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-        <div className="flex items-center justify-between gap-3 rounded-xl border bg-card px-4 py-3">
-          <div className="flex items-center gap-2 text-sm">
-            <ShieldCheck className="h-4 w-4 text-muted-foreground" />
-            <span className="font-medium">Auto Unfollow</span>
-          </div>
-          <Switch
-            checked={autoUnfollow}
-            onCheckedChange={setAutoUnfollow}
-            aria-label="Toggle auto unfollow"
-          />
-        </div>
-
-        <Button
-          onClick={startAutomation}
-          size="lg"
-          className="group relative overflow-hidden"
-        >
-          <span className="absolute inset-0 opacity-0 transition-opacity group-hover:opacity-100 shimmer-mask" />
-          <Play className="mr-2 h-4 w-4" />
-          Start automation
-        </Button>
+      <div className="flex items-center gap-3">
+        {isProfileMissing && !isSyncing && (
+          <Button onClick={toggleSync} className="animate-pulse gap-2" variant="default">
+            <Play className="h-4 w-4" />
+            Start First Scan
+          </Button>
+        )}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" className="gap-2">
+              Actions
+              <ChevronDown className="h-4 w-4 opacity-50" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-56">
+            <DropdownMenuItem onClick={toggleSync} className="cursor-pointer">
+              {isSyncing ? (
+                <>
+                  <Pause className="mr-2 h-4 w-4" />
+                  Stop Sync
+                </>
+              ) : (
+                <>
+                  <Play className="mr-2 h-4 w-4" />
+                  Start Sync
+                </>
+              )}
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={toggleAutoUnfollow} className="cursor-pointer">
+              {isAutoUnfollowing ? (
+                <>
+                  <Square className="mr-2 h-4 w-4" />
+                  Stop Auto-Unfollowing
+                </>
+              ) : (
+                <>
+                  <PlaySquare className="mr-2 h-4 w-4" />
+                  Start Auto-Unfollowing
+                </>
+              )}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
     </motion.div>
   );

@@ -9,7 +9,7 @@ import { waitForLogin } from "../instagram/auth.js";
 import { clearPopups, unfollowUser } from "../instagram/interactions.js";
 import { navigateToProfile } from "../instagram/navigation.js";
 
-export async function runAutomation(options?: { autoUnfollow?: boolean; }) {
+export default async function syncProfile(signal?: AbortSignal) {
   broadcast("status", { message: "Starting automation..." });
   const root = process.cwd();
   const db = new Database();
@@ -26,12 +26,33 @@ export async function runAutomation(options?: { autoUnfollow?: boolean; }) {
   };
 
   broadcast("status", { message: "Launching browser..." });
+  if (signal?.aborted) throw new Error("Cancelled before start");
+
   const { context, page } = await openPersistent(runOptions);
 
+  // Handle cancellation by force-closing the browser context, which will cause
+  // ongoing Playwright actions to reject.
+  const abortHandler = async () => {
+    broadcast("status", { message: "Cancelling..." });
+    try {
+      await context.close();
+    } catch (e) {
+      // ignore
+    }
+  };
+
+  if (signal) {
+    signal.addEventListener("abort", abortHandler);
+  }
+
   try {
+    if (signal?.aborted) throw new Error("Cancelled");
+
     broadcast("status", { message: "Waiting for login..." });
     await waitForLogin(page);
     await clearPopups(page);
+
+    if (signal?.aborted) throw new Error("Cancelled");
 
     broadcast("status", { message: "Saving session..." });
     const storageStatePath = path.join(root, ".user-data", "storage-state.json");
@@ -56,36 +77,27 @@ export async function runAutomation(options?: { autoUnfollow?: boolean; }) {
     const result: ScanResult = { timestamp: new Date().toISOString(), followers, following };
     await db.addScan(username, result);
 
-    // Auto-unfollow logic
-    if (options?.autoUnfollow) {
-      broadcast("status", { message: "Analyzing relationships for auto-unfollow..." });
-      const notFollowingBack = following.filter(u => !followers.includes(u));
-
-      const favorites = await db.getFavorites();
-      const toUnfollow = notFollowingBack.filter(u => !favorites.includes(u));
-
-      broadcast("info", { message: `Found ${notFollowingBack.length} not following back. ` });
-      broadcast("info", { message: `Protected by favorites: ${notFollowingBack.length - toUnfollow.length}` });
-      broadcast("info", { message: `To unfollow: ${toUnfollow.length}` });
-
-      for (const user of toUnfollow) {
-        broadcast("status", { message: `Unfollowing @${user}...` });
-        try {
-          await unfollowUser(page, user);
-        } catch (e: any) {
-          broadcast("error", { message: `Failed to unfollow @${user}: ${e.message}` });
-        }
-      }
-    }
-
     broadcast("status", { message: "Done! Saved data." });
 
   } catch (err: any) {
-    consola.error("Error running workflow:", err);
-    await page.screenshot({ path: "error-screenshot.png" });
-    broadcast("error", { message: err.message });
+    // If it was our manual abort, we might see "Target closed" or "Cancelled"
+    if (signal?.aborted || err.message.includes("Target closed")) {
+      broadcast("status", { message: "Operation cancelled." });
+      consola.info("Workflow cancelled by user.");
+    } else {
+      consola.error("Error running workflow:", err);
+      try {
+        await page.screenshot({ path: "error-screenshot.png" });
+      } catch {} // Context might be closed
+      broadcast("error", { message: err.message });
+    }
   } finally {
+    if (signal) {
+      signal.removeEventListener("abort", abortHandler);
+    }
     broadcast("status", { message: "Closing browser..." });
-    await context.close();
+    try {
+      await context.close();
+    } catch {}
   }
 }
