@@ -38,4 +38,5 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 screenshots/
 error-screenshot.png
 
-src/lib/generated
+apps/api/*.db
+apps/api/src/lib/generated
